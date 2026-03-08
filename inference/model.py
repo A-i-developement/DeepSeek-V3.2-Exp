@@ -426,6 +426,15 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, interleaved: bool
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
+    """
+    Applies a fast Hadamard transform to the input tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor.
+
+    Returns:
+        torch.Tensor: Transformed tensor.
+    """
     assert x.dtype == torch.bfloat16
     from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
@@ -433,7 +442,31 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
 
 
 class Indexer(torch.nn.Module):
+    """
+    Indexer module for computing index scores and selecting top-k indices.
+
+    Attributes:
+        dim (int): Model dimension.
+        n_heads (int): Number of index heads.
+        n_local_heads (int): Number of local index heads.
+        head_dim (int): Dimension of each index head.
+        rope_head_dim (int): Dimension for rotary positional embeddings.
+        index_topk (int): Number of top-k indices to select.
+        q_lora_rank (int): LoRA rank for query projection.
+        wq_b (Linear): Linear layer for query projection.
+        wk (Linear): Linear layer for key projection.
+        k_norm (LayerNorm): Layer normalization for keys.
+        weights_proj (Linear): Linear layer for projecting weights.
+        softmax_scale (float): Scaling factor for softmax.
+        scale_fmt (Optional[str]): Quantization scale format.
+    """
     def __init__(self, args: ModelArgs):
+        """
+        Initializes the Indexer module.
+
+        Args:
+            args (ModelArgs): Model arguments containing indexer parameters.
+        """
         super().__init__()
         self.dim: int = args.dim
         self.n_heads: int = args.index_n_heads
@@ -455,6 +488,19 @@ class Indexer(torch.nn.Module):
 
 
     def forward(self, x: torch.Tensor, qr: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
+        """
+        Forward pass for the Indexer module.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+            qr (torch.Tensor): Query latent representation.
+            start_pos (int): Starting position in the sequence.
+            freqs_cis (torch.Tensor): Precomputed complex exponential values for rotary embeddings.
+            mask (Optional[torch.Tensor]): Mask tensor to exclude certain positions from attention.
+
+        Returns:
+            torch.Tensor: Selected top-k indices.
+        """
         bsz, seqlen, _ = x.size()
         end_pos = start_pos + seqlen
         q = self.wq_b(qr)
@@ -488,6 +534,16 @@ class Indexer(torch.nn.Module):
 
 
 def weight_dequant(weight, scale):
+    """
+    Dequantizes the weight tensor using the provided scale.
+
+    Args:
+        weight (torch.Tensor): Quantized weight tensor.
+        scale (torch.Tensor): Scaling factors for dequantization.
+
+    Returns:
+        torch.Tensor: Dequantized weight tensor.
+    """
     shape = weight.shape
     assert weight.dim() == 2
     weight = weight.view(shape[0] // block_size, block_size, shape[1] // block_size, block_size).transpose(1, 2).contiguous().view(-1, block_size * block_size)
@@ -512,6 +568,12 @@ class MLA(nn.Module):
         softmax_scale (float): Scaling factor for softmax in attention computation.
     """
     def __init__(self, args: ModelArgs):
+        """
+        Initializes the Multi-Head Latent Attention (MLA) Layer.
+
+        Args:
+            args (ModelArgs): Model arguments containing attention parameters.
+        """
         super().__init__()
         self.dim = args.dim
         self.n_heads = args.n_heads
