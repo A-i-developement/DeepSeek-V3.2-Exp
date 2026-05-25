@@ -11,6 +11,11 @@ from safetensors.torch import load_model
 from model import Transformer, ModelArgs
 
 
+def dist_print(*args, **kwargs):
+    if int(os.getenv("RANK", "0")) == 0:
+        print(*args, **kwargs)
+
+
 def sample(logits, temperature: float = 1.0):
     """
     Samples a token from the logits using temperature scaling.
@@ -49,7 +54,8 @@ def generate(
         List[List[int]]: A list of lists containing the generated tokens for each sequence.
     """
     prompt_lens = [len(t) for t in prompt_tokens]
-    assert max(prompt_lens) <= model.max_seq_len, f"Prompt length exceeds model maximum sequence length (max_seq_len={model.max_seq_len})"
+    if max(prompt_lens) > model.max_seq_len:
+        raise ValueError(f"Prompt length exceeds model maximum sequence length (max_seq_len={model.max_seq_len})")
     total_len = min(model.max_seq_len, max_new_tokens + max(prompt_lens))
     tokens = torch.full((len(prompt_tokens), total_len), -1, dtype=torch.long, device="cuda")
     for i, t in enumerate(prompt_tokens):
@@ -67,10 +73,13 @@ def generate(
         tokens[:, cur_pos] = next_token
         finished |= torch.logical_and(~prompt_mask[:, cur_pos], next_token == eos_id)
         prev_pos = cur_pos
-        if finished.all():
+
+        if cur_pos % 16 == 0 and finished.all():
             break
+
     completion_tokens = []
-    for i, toks in enumerate(tokens.tolist()):
+    tokens_cpu = tokens.to("cpu")
+    for i, toks in enumerate(tokens_cpu.tolist()):
         toks = toks[prompt_lens[i]:prompt_lens[i]+max_new_tokens]
         if eos_id in toks:
             toks = toks[:toks.index(eos_id)]
@@ -102,22 +111,19 @@ def main(
     local_rank = int(os.getenv("LOCAL_RANK", "0"))
     if world_size > 1:
         dist.init_process_group("nccl")
-    global print
-    if rank != 0:
-        print = lambda *_, **__: None
     torch.cuda.set_device(local_rank)
     torch.set_default_dtype(torch.bfloat16)
     torch.set_num_threads(8)
     torch.manual_seed(33377335)
     with open(config) as f:
-        args = ModelArgs(**json.load(f))
-    print(args)
+        model_args = ModelArgs(**json.load(f))
+    dist_print(model_args)
     with torch.device("cuda"):
-        model = Transformer(args)
+        model = Transformer(model_args)
     tokenizer = AutoTokenizer.from_pretrained(ckpt_path)
-    print("load model")
+    dist_print("load model")
     load_model(model, os.path.join(ckpt_path, f"model{rank}-mp{world_size}.safetensors"))
-    print("I'm DeepSeek 👋")
+    dist_print("I'm DeepSeek 👋")
 
     if interactive:
         messages = []
@@ -141,19 +147,20 @@ def main(
             prompt_tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
             completion_tokens = generate(model, [prompt_tokens], max_new_tokens, tokenizer.eos_token_id, temperature)
             completion = tokenizer.decode(completion_tokens[0], skip_special_tokens=True)
-            print(completion)
+            dist_print(completion)
             messages.append({"role": "assistant", "content": completion})
     else:
         with open(input_file) as f:
             prompts = f.read().split("\n\n")
-        assert len(prompts) <= args.max_batch_size, f"Number of prompts exceeds maximum batch size ({args.max_batch_size})"
+        if len(prompts) > model_args.max_batch_size:
+            raise ValueError(f"Number of prompts exceeds maximum batch size ({model_args.max_batch_size})")
         prompt_tokens = [tokenizer.apply_chat_template([{"role": "user", "content": prompt}], add_generation_prompt=True) for prompt in prompts]
         completion_tokens = generate(model, prompt_tokens, max_new_tokens, tokenizer.eos_token_id, temperature)
         completions = tokenizer.batch_decode(completion_tokens, skip_special_tokens=True)
         for prompt, completion in zip(prompts, completions):
-            print("Prompt:", prompt)
-            print("Completion:", completion)
-            print()
+            dist_print("Prompt:", prompt)
+            dist_print("Completion:", completion)
+            dist_print()
 
     if world_size > 1:
         dist.destroy_process_group()
@@ -182,5 +189,6 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=200)
     parser.add_argument("--temperature", type=float, default=0.6)
     args = parser.parse_args()
-    assert args.input_file or args.interactive, "Either input-file or interactive mode must be specified"
+    if not args.input_file and not args.interactive:
+        parser.error("Either input-file or interactive mode must be specified")
     main(args.ckpt_path, args.config, args.input_file, args.interactive, args.max_new_tokens, args.temperature)
