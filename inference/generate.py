@@ -123,9 +123,17 @@ def main(
         messages = []
         while True:
             if world_size == 1:
-                prompt = input(">>> ")
+                try:
+                    prompt = input(">>> ")
+                except (EOFError, KeyboardInterrupt):
+                    prompt = "/exit"
+                    print()
             elif rank == 0:
-                prompt = input(">>> ")
+                try:
+                    prompt = input(">>> ")
+                except (EOFError, KeyboardInterrupt):
+                    prompt = "/exit"
+                    print()
                 objects = [prompt]
                 dist.broadcast_object_list(objects, 0)
             else:
