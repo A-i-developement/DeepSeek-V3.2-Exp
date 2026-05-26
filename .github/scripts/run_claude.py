@@ -31,8 +31,12 @@ def main():
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     event_name = os.environ.get("GITHUB_EVENT_NAME")
 
-    if not anthropic_api_key or not github_token or not github_repo or not event_path:
-        print("Error: Required environment variables are missing.")
+    if not anthropic_api_key:
+        print("Notice: ANTHROPIC_API_KEY is not set. Skipping Claude integration.")
+        sys.exit(0)
+
+    if not github_token or not github_repo or not event_path:
+        print("Error: Required GitHub environment variables are missing.")
         sys.exit(1)
 
     # Initialize clients
