@@ -1,7 +1,6 @@
-import os
+from pathlib import Path
 import shutil
 from argparse import ArgumentParser
-from glob import glob
 from tqdm import tqdm, trange
 
 import torch
@@ -43,7 +42,7 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
         save_path (str): Path to the directory where the converted checkpoint files will be saved.
         n_experts (int): Total number of experts in the model.
         mp (int): Model parallelism factor.
-        
+
     Returns:
         None
     """
@@ -51,8 +50,8 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
     n_local_experts = n_experts // mp
     state_dicts = [{} for _ in range(mp)]
 
-    for file_path in tqdm(glob(os.path.join(hf_ckpt_path, "*.safetensors"))):
-        with safe_open(file_path, framework="pt", device="cpu") as f:
+    for file_path in tqdm(Path(hf_ckpt_path).glob("*.safetensors")):
+        with safe_open(str(file_path), framework="pt", device="cpu") as f:
             for name in f.keys():
                 if "model.layers.61" in name:
                     continue
@@ -71,21 +70,28 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
                     new_param = param
                     if "experts" in name and "shared_experts" not in name:
                         idx = int(name.split(".")[-3])
-                        if idx < i * n_local_experts or idx >= (i + 1) * n_local_experts:
+                        if (
+                            idx < i * n_local_experts
+                            or idx >= (i + 1) * n_local_experts
+                        ):
                             continue
                     elif dim is not None:
-                        assert param.size(dim) % mp == 0, f"Dimension {dim} must be divisible by {mp}"
+                        assert param.size(dim) % mp == 0, (
+                            f"Dimension {dim} must be divisible by {mp}"
+                        )
                         shard_size = param.size(dim) // mp
-                        new_param = param.narrow(dim, i * shard_size, shard_size).contiguous()
+                        new_param = param.narrow(
+                            dim, i * shard_size, shard_size
+                        ).contiguous()
                     state_dicts[i][name] = new_param
 
-    os.makedirs(save_path, exist_ok=True)
+    Path(save_path).mkdir(parents=True, exist_ok=True)
 
     for i in trange(mp):
-        save_file(state_dicts[i], os.path.join(save_path, f"model{i}-mp{mp}.safetensors"))
+        save_file(state_dicts[i], str(Path(save_path) / f"model{i}-mp{mp}.safetensors"))
 
-    for file_path in glob(os.path.join(hf_ckpt_path, "*token*")):
-        new_file_path = os.path.join(save_path, os.path.basename(file_path))
+    for file_path in Path(hf_ckpt_path).glob("*token*"):
+        new_file_path = Path(save_path) / file_path.name
         shutil.copyfile(file_path, new_file_path)
 
 
@@ -96,5 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-experts", type=int, required=True)
     parser.add_argument("--model-parallel", type=int, required=True)
     args = parser.parse_args()
-    assert args.n_experts % args.model_parallel == 0, "Number of experts must be divisible by model parallelism"
+    assert args.n_experts % args.model_parallel == 0, (
+        "Number of experts must be divisible by model parallelism"
+    )
     main(args.hf_ckpt_path, args.save_path, args.n_experts, args.model_parallel)
