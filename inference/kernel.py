@@ -99,10 +99,10 @@ def act_quant(
             - The quantized tensor with dtype `torch.float8_e4m3fn`.
             - A tensor of scaling factors with dtype `torch.float32`.
     """
-    assert x.is_contiguous(), "Input tensor must be contiguous"
-    assert x.size(-1) % block_size == 0, (
-        f"Last dimension size must be divisible by block_size (block_size={block_size})"
-    )
+    if not x.is_contiguous():
+        raise ValueError("Input tensor must be contiguous")
+    if x.size(-1) % block_size != 0:
+        raise ValueError(f"Last dimension size must be divisible by block_size (block_size={block_size})")
     N = x.size(-1)
     y = torch.empty_like(x, dtype=torch.float8_e4m3fn)
     s = x.new_empty(*x.size()[:-1], N // block_size, dtype=torch.float32)
@@ -113,7 +113,8 @@ def act_quant(
 
 @tilelang.jit(pass_configs=pass_configs)
 def fp8_gemm_kernel(N, K, out_dtype=BF16, accum_dtype="float32"):
-    assert out_dtype in [BF16, "float32"]
+    if out_dtype not in [BF16, "float32"]:
+        raise ValueError(f"Output dtype {out_dtype} must be {BF16} or float32")
 
     M = T.symbolic("M")
     group_size = 128
@@ -183,10 +184,10 @@ def fp8_gemm(
     Returns:
         torch.Tensor: The result of the matrix multiplication.
     """
-    assert a.is_contiguous() and b.is_contiguous(), "Input tensors must be contiguous"
-    assert a_s.is_contiguous() and b_s.is_contiguous(), (
-        "Scaling factor tensors must be contiguous"
-    )
+    if not a.is_contiguous() or not b.is_contiguous():
+        raise ValueError("Input tensors must be contiguous")
+    if not a_s.is_contiguous() or not b_s.is_contiguous():
+        raise ValueError("Scaling factor tensors must be contiguous")
     K = a.size(-1)
     M = a.numel() // K
     N = b.size(0)
