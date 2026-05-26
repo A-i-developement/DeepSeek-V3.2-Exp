@@ -535,7 +535,7 @@ class Indexer(torch.nn.Module):
         topk_indices_ = topk_indices.clone()
         dist.broadcast(topk_indices_, src=0)
         if not torch.equal(topk_indices, topk_indices_):
-            raise ValueError(f"{topk_indices=} {topk_indices_=}")
+            raise ValueError(f"topk_indices={topk_indices} topk_indices_={topk_indices_}")
         return topk_indices
 
 
