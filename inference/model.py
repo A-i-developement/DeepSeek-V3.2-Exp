@@ -101,7 +101,8 @@ class ParallelEmbedding(nn.Module):
         super().__init__()
         self.vocab_size = vocab_size
         self.dim = dim
-        assert vocab_size % world_size == 0, f"Vocabulary size must be divisible by world size (world_size={world_size})"
+        if vocab_size % world_size != 0:
+            raise ValueError(f"Vocabulary size must be divisible by world size (world_size={world_size})")
         self.part_vocab_size = (vocab_size // world_size)
         self.vocab_start_idx = rank * self.part_vocab_size
         self.vocab_end_idx = self.vocab_start_idx + self.part_vocab_size
@@ -154,7 +155,8 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
           is used for computation.
         - For other cases, the function applies quantization to `x` and uses `fp8_gemm` for computation.
     """
-    assert bias is None
+    if bias is not None:
+        raise ValueError("bias must be None")
 
     if weight.dtype != torch.float8_e4m3fn:
         return F.linear(x, weight)
@@ -216,7 +218,8 @@ class ColumnParallelLinear(Linear):
         dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
-        assert out_features % world_size == 0, f"Output features must be divisible by world size (world_size={world_size})"
+        if out_features % world_size != 0:
+            raise ValueError(f"Output features must be divisible by world size (world_size={world_size})")
         self.part_out_features = out_features // world_size
         super().__init__(in_features, self.part_out_features, bias, dtype)
 
@@ -245,7 +248,8 @@ class RowParallelLinear(Linear):
         dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
     def __init__(self, in_features: int, out_features: int, bias: bool = False, reduce_output = True, dtype = None):
-        assert in_features % world_size == 0, f"Input features must be divisible by world size (world_size={world_size})"
+        if in_features % world_size != 0:
+            raise ValueError(f"Input features must be divisible by world size (world_size={world_size})")
         self.part_in_features = in_features // world_size
         self.reduce_output = reduce_output
         super().__init__(self.part_in_features, out_features, bias, dtype)
@@ -435,7 +439,8 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: Transformed tensor.
     """
-    assert x.dtype == torch.bfloat16
+    if x.dtype != torch.bfloat16:
+        raise ValueError("Input tensor must be of dtype torch.bfloat16")
     from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
     return hadamard_transform(x, scale=hidden_size ** -0.5)
@@ -529,7 +534,8 @@ class Indexer(torch.nn.Module):
         topk_indices = index_score.topk(min(self.index_topk, end_pos), dim=-1)[1]
         topk_indices_ = topk_indices.clone()
         dist.broadcast(topk_indices_, src=0)
-        assert torch.all(topk_indices == topk_indices_), f"{topk_indices=} {topk_indices_=}"
+        if not torch.equal(topk_indices, topk_indices_):
+            raise ValueError(f"{topk_indices=} {topk_indices_=}")
         return topk_indices
 
 
@@ -545,7 +551,8 @@ def weight_dequant(weight, scale):
         torch.Tensor: Dequantized weight tensor.
     """
     shape = weight.shape
-    assert weight.dim() == 2
+    if weight.dim() != 2:
+        raise ValueError("weight tensor must be 2-dimensional")
     weight = weight.view(shape[0] // block_size, block_size, shape[1] // block_size, block_size).transpose(1, 2).contiguous().view(-1, block_size * block_size)
     weight = (weight.float() * scale.view(-1, 1).float()).to(torch.get_default_dtype()).view(shape[0] // block_size, shape[1] // block_size, block_size, block_size).transpose(1, 2).contiguous().view(shape)
     return weight
@@ -828,7 +835,8 @@ class MoE(nn.Module):
         """
         super().__init__()
         self.dim = args.dim
-        assert args.n_routed_experts % world_size == 0, f"Number of experts must be divisible by world size (world_size={world_size})"
+        if args.n_routed_experts % world_size != 0:
+            raise ValueError(f"Number of experts must be divisible by world size (world_size={world_size})")
         self.n_routed_experts = args.n_routed_experts
         self.n_local_experts = args.n_routed_experts // world_size
         self.n_activated_experts = args.n_activated_experts
