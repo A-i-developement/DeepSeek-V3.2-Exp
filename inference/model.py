@@ -99,6 +99,7 @@ class ParallelEmbedding(nn.Module):
     """
     def __init__(self, vocab_size: int, dim: int):
         super().__init__()
+        assert vocab_size % world_size == 0, f"vocab_size ({vocab_size}) must be divisible by world_size ({world_size})"
         self.vocab_size = vocab_size
         self.dim = dim
         assert vocab_size % world_size == 0, f"Vocabulary size must be divisible by world size (world_size={world_size})"
@@ -216,7 +217,7 @@ class ColumnParallelLinear(Linear):
         dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
-        assert out_features % world_size == 0, f"Output features must be divisible by world size (world_size={world_size})"
+        assert out_features % world_size == 0, f"out_features ({out_features}) must be divisible by world_size ({world_size})"
         self.part_out_features = out_features // world_size
         super().__init__(in_features, self.part_out_features, bias, dtype)
 
@@ -245,7 +246,7 @@ class RowParallelLinear(Linear):
         dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
     def __init__(self, in_features: int, out_features: int, bias: bool = False, reduce_output = True, dtype = None):
-        assert in_features % world_size == 0, f"Input features must be divisible by world size (world_size={world_size})"
+        assert in_features % world_size == 0, f"in_features ({in_features}) must be divisible by world_size ({world_size})"
         self.part_in_features = in_features // world_size
         self.reduce_output = reduce_output
         super().__init__(self.part_in_features, out_features, bias, dtype)
@@ -527,9 +528,6 @@ class Indexer(torch.nn.Module):
         if mask is not None:
             index_score += mask
         topk_indices = index_score.topk(min(self.index_topk, end_pos), dim=-1)[1]
-        topk_indices_ = topk_indices.clone()
-        dist.broadcast(topk_indices_, src=0)
-        assert torch.all(topk_indices == topk_indices_), f"{topk_indices=} {topk_indices_=}"
         return topk_indices
 
 
@@ -827,8 +825,8 @@ class MoE(nn.Module):
             args (ModelArgs): Model arguments containing MoE parameters.
         """
         super().__init__()
+        assert args.n_routed_experts % world_size == 0, f"n_routed_experts ({args.n_routed_experts}) must be divisible by world_size ({world_size})"
         self.dim = args.dim
-        assert args.n_routed_experts % world_size == 0, f"Number of experts must be divisible by world size (world_size={world_size})"
         self.n_routed_experts = args.n_routed_experts
         self.n_local_experts = args.n_routed_experts // world_size
         self.n_activated_experts = args.n_activated_experts
