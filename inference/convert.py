@@ -64,7 +64,8 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
                 name = name.replace("weight_scale_inv", "scale")
                 name = name.replace("e_score_correction_bias", "bias")
                 key = name.split(".")[-2]
-                assert key in mapping, f"Key {key} not found in mapping"
+                if key not in mapping:
+                    raise KeyError(f"Key {key!r} not found in mapping")
                 new_key, dim = mapping[key]
                 name = name.replace(key, new_key)
                 for i in range(mp):
@@ -74,7 +75,8 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
                         if idx < i * n_local_experts or idx >= (i + 1) * n_local_experts:
                             continue
                     elif dim is not None:
-                        assert param.size(dim) % mp == 0, f"Dimension {dim} must be divisible by {mp}"
+                        if param.size(dim) % mp != 0:
+                            raise ValueError(f"Dimension {dim} of parameter {name!r} (size {param.size(dim)}) must be divisible by model-parallel factor {mp}")
                         shard_size = param.size(dim) // mp
                         new_param = param.narrow(dim, i * shard_size, shard_size).contiguous()
                     state_dicts[i][name] = new_param
@@ -96,5 +98,6 @@ if __name__ == "__main__":
     parser.add_argument("--n-experts", type=int, required=True)
     parser.add_argument("--model-parallel", type=int, required=True)
     args = parser.parse_args()
-    assert args.n_experts % args.model_parallel == 0, "Number of experts must be divisible by model parallelism"
+    if args.n_experts % args.model_parallel != 0:
+        parser.error("Number of experts must be divisible by model parallelism")
     main(args.hf_ckpt_path, args.save_path, args.n_experts, args.model_parallel)
