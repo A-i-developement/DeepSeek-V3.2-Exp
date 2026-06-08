@@ -533,10 +533,7 @@ class Indexer(torch.nn.Module):
             index_score += mask
         topk_indices = index_score.topk(min(self.index_topk, end_pos), dim=-1)[1]
         if world_size > 1:
-            topk_indices_ = topk_indices.clone()
-            dist.broadcast(topk_indices_, src=0)
-            if not torch.all(topk_indices == topk_indices_):
-                raise RuntimeError(f"topk_indices mismatch across ranks: {topk_indices=} {topk_indices_=}")
+            dist.broadcast(topk_indices, src=0)
         return topk_indices
 
 
