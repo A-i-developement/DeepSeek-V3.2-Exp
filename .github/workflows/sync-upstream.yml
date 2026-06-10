@@ -1,0 +1,40 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync with deepseek-ai/DeepSeek-V3.2-Exp
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/deepseek-ai/DeepSeek-V3.2-Exp.git
+          git fetch upstream
+
+      - name: Merge upstream changes into main
+      - name: Merge upstream changes into main
+        run: |
+          git checkout main
+          git merge upstream/main --no-edit --strategy-option=ours
+
+      - name: Push updated main
+        run: git push origin main

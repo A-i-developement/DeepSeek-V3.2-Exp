@@ -65,7 +65,7 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
                 name = name.replace("e_score_correction_bias", "bias")
                 key = name.split(".")[-2]
                 if key not in mapping:
-                    raise ValueError(f"Key {key} not found in mapping")
+                    raise KeyError(f"Key {key!r} not found in mapping")
                 new_key, dim = mapping[key]
                 name = name.replace(key, new_key)
                 for i in range(mp):
@@ -76,7 +76,7 @@ def main(hf_ckpt_path, save_path, n_experts, mp):
                             continue
                     elif dim is not None:
                         if param.size(dim) % mp != 0:
-                            raise ValueError(f"Dimension {dim} must be divisible by {mp}")
+                            raise ValueError(f"Dimension {dim} of parameter {name!r} (size {param.size(dim)}) must be divisible by model-parallel factor {mp}")
                         shard_size = param.size(dim) // mp
                         new_param = param.narrow(dim, i * shard_size, shard_size).contiguous()
                     state_dicts[i][name] = new_param

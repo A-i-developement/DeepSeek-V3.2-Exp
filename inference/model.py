@@ -156,7 +156,7 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
         - For other cases, the function applies quantization to `x` and uses `fp8_gemm` for computation.
     """
     if bias is not None:
-        raise ValueError("bias must be None")
+        raise ValueError("bias is not supported in this linear implementation")
 
     if weight.dtype != torch.float8_e4m3fn:
         return F.linear(x, weight)
@@ -440,7 +440,7 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
         torch.Tensor: Transformed tensor.
     """
     if x.dtype != torch.bfloat16:
-        raise ValueError("Input tensor must be of dtype torch.bfloat16")
+        raise ValueError(f"rotate_activation expects bfloat16 input, got {x.dtype}")
     from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
     return hadamard_transform(x, scale=hidden_size ** -0.5)
@@ -532,10 +532,11 @@ class Indexer(torch.nn.Module):
         if mask is not None:
             index_score += mask
         topk_indices = index_score.topk(min(self.index_topk, end_pos), dim=-1)[1]
-        topk_indices_ = topk_indices.clone()
-        dist.broadcast(topk_indices_, src=0)
-        if not torch.equal(topk_indices, topk_indices_):
-            raise ValueError(f"topk_indices={topk_indices} topk_indices_={topk_indices_}")
+        if world_size > 1:
+            topk_indices_ = topk_indices.clone()
+            dist.broadcast(topk_indices_, src=0)
+            if not torch.all(topk_indices == topk_indices_):
+                raise RuntimeError(f"topk_indices mismatch across ranks: {topk_indices=} {topk_indices_=}")
         return topk_indices
 
 
@@ -552,7 +553,7 @@ def weight_dequant(weight, scale):
     """
     shape = weight.shape
     if weight.dim() != 2:
-        raise ValueError("weight tensor must be 2-dimensional")
+        raise ValueError(f"weight_dequant expects a 2-D weight tensor, got {weight.dim()}-D")
     weight = weight.view(shape[0] // block_size, block_size, shape[1] // block_size, block_size).transpose(1, 2).contiguous().view(-1, block_size * block_size)
     weight = (weight.float() * scale.view(-1, 1).float()).to(torch.get_default_dtype()).view(shape[0] // block_size, shape[1] // block_size, block_size, block_size).transpose(1, 2).contiguous().view(shape)
     return weight
