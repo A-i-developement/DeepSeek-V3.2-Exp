@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Tuple, Optional, Literal
 
 import torch
@@ -7,12 +8,22 @@ from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
-from kernel import act_quant, fp8_gemm, fp8_index
-
 
 world_size = 1
 rank = 0
 block_size = 128
+
+
+@lru_cache(maxsize=1)
+def _load_kernel_ops():
+    try:
+        from kernel import act_quant, fp8_gemm, fp8_index
+    except OSError as exc:
+        raise RuntimeError(
+            "TileLang kernels require CUDA runtime libraries. Install the CUDA driver/runtime "
+            "before running GPU inference."
+        ) from exc
+    return act_quant, fp8_gemm, fp8_index
 
 @dataclass
 class ModelArgs:
@@ -161,6 +172,7 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
     if weight.dtype != torch.float8_e4m3fn:
         return F.linear(x, weight)
     else:
+        act_quant, fp8_gemm, _ = _load_kernel_ops()
         x, scale = act_quant(x, block_size, scale_fmt)
         return fp8_gemm(x, scale, weight, weight.scale)
 
@@ -441,9 +453,19 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     """
     if x.dtype != torch.bfloat16:
         raise ValueError(f"rotate_activation expects bfloat16 input, got {x.dtype}")
-    from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
-    return hadamard_transform(x, scale=hidden_size ** -0.5)
+    if hidden_size == 0 or hidden_size & (hidden_size - 1):
+        raise ValueError(f"rotate_activation expects a power-of-two hidden size, got {hidden_size}")
+
+    y = x.reshape(-1, hidden_size).contiguous()
+    width = 1
+    while width < hidden_size:
+        y = y.reshape(-1, hidden_size // (2 * width), 2, width)
+        a, b = y.unbind(dim=-2)
+        y = torch.cat((a + b, a - b), dim=-1)
+        width *= 2
+
+    return y.reshape_as(x) * (hidden_size ** -0.5)
 
 
 class Indexer(torch.nn.Module):
@@ -522,6 +544,7 @@ class Indexer(torch.nn.Module):
         k = torch.cat([k_pe, k_nope], dim=-1)
         q = rotate_activation(q)
         k = rotate_activation(k)
+        act_quant, _, fp8_index = _load_kernel_ops()
         q_fp8, q_scale = act_quant(q, block_size, self.scale_fmt)
         k_fp8, k_scale = act_quant(k, block_size, self.scale_fmt)
         self.k_cache[:bsz, start_pos:end_pos] = k_fp8
@@ -634,6 +657,7 @@ class MLA(nn.Module):
         kv = self.kv_norm(kv)
         k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
         # we use fp8 kv cache in actual deployment, so here we simulate the precision by casting kv to fp8 and then back to bf16.
+        act_quant, _, _ = _load_kernel_ops()
         kv_fp8, kv_scale = act_quant(kv, block_size, self.scale_fmt)
         kv = (kv_fp8.view(-1, block_size).float() * kv_scale.view(-1, 1)).to(kv.dtype).view_as(kv)
         self.kv_cache[:bsz, start_pos:end_pos] = kv
