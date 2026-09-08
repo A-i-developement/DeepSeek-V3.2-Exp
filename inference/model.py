@@ -441,9 +441,22 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     """
     if x.dtype != torch.bfloat16:
         raise ValueError(f"rotate_activation expects bfloat16 input, got {x.dtype}")
-    from fast_hadamard_transform import hadamard_transform
     hidden_size = x.size(-1)
-    return hadamard_transform(x, scale=hidden_size ** -0.5)
+    scale = hidden_size ** -0.5
+    try:
+        from fast_hadamard_transform import hadamard_transform
+        return hadamard_transform(x, scale=scale)
+    except ModuleNotFoundError:
+        if hidden_size & (hidden_size - 1) != 0:
+            raise ValueError("rotate_activation fallback requires power-of-two hidden size")
+        y = x
+        width = 1
+        while width < hidden_size:
+            y = y.view(*y.shape[:-1], -1, 2, width)
+            a, b = y.unbind(dim=-2)
+            y = torch.cat((a + b, a - b), dim=-1)
+            width *= 2
+        return y * scale
 
 
 class Indexer(torch.nn.Module):

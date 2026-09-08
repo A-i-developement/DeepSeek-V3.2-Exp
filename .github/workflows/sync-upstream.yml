@@ -31,7 +31,6 @@ jobs:
           git fetch upstream
 
       - name: Merge upstream changes into main
-      - name: Merge upstream changes into main
         run: |
           git checkout main
           git merge upstream/main --no-edit --strategy-option=ours
